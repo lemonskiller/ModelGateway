@@ -1,0 +1,30 @@
+[project]
+name = "model-gateway"
+version = "0.1.0"
+description = "Internal OpenAI-compatible gateway for on-demand vLLM workers"
+requires-python = ">=3.12"
+dependencies = [
+  "fastapi>=0.115,<1",
+  "httpx>=0.28,<1",
+  "pydantic>=2.9,<3",
+  "PyYAML>=6,<7",
+  "uvicorn[standard]>=0.34,<1",
+]
+
+[build-system]
+requires = ["setuptools>=75"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["app*"]
+
+[dependency-groups]
+dev = [
+  "pytest>=8.3,<9",
+  "pytest-asyncio>=0.24,<1",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+pythonpath = ["."]

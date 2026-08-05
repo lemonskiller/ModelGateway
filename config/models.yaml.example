@@ -1,0 +1,41 @@
+gateway:
+  host: 0.0.0.0
+  port: 8000
+  startup_timeout: 600
+  request_timeout: 300
+  drain_timeout: 120
+  poll_interval: 1
+  reaper_interval: 15
+  max_queue_size_per_model: 32
+  # Prefer environment variables for secrets:
+  # MODEL_GATEWAY_API_KEY
+  # MODEL_GATEWAY_ADMIN_KEY
+
+models:
+  - id: qwen3-8b
+    path: /models/Qwen3-8B-AWQ
+    served_model_name: qwen3-8b
+    gpu_group: [0]
+    port: 9101
+    mode: hot
+    priority: 100
+    idle_ttl: 1800
+    quantization: awq
+    max_model_len: 8192
+    max_num_seqs: 8
+    max_num_batched_tokens: 2048
+    gpu_memory_utilization: 0.82
+
+  - id: qwen3-14b
+    path: /models/Qwen3-14B-AWQ
+    served_model_name: qwen3-14b
+    gpu_group: [0]
+    port: 9102
+    mode: cold
+    priority: 50
+    idle_ttl: 600
+    quantization: awq
+    max_model_len: 8192
+    max_num_seqs: 4
+    max_num_batched_tokens: 1024
+    gpu_memory_utilization: 0.82

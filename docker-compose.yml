@@ -1,0 +1,25 @@
+services:
+  model-gateway:
+    build: .
+    ports:
+      - "127.0.0.1:8000:8000"
+    environment:
+      MODEL_GATEWAY_CONFIG: /app/config/models.yaml
+      MODEL_GATEWAY_API_KEY: ${MODEL_GATEWAY_API_KEY:?set MODEL_GATEWAY_API_KEY}
+      MODEL_GATEWAY_ADMIN_KEY: ${MODEL_GATEWAY_ADMIN_KEY:?set MODEL_GATEWAY_ADMIN_KEY}
+    volumes:
+      - ./config/models.yaml:/app/config/models.yaml:ro
+      - ${MODEL_STORAGE_PATH:?set MODEL_STORAGE_PATH}:/models:ro
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    networks:
+      - model-network
+
+networks:
+  model-network:
+    name: model-network
