@@ -23,6 +23,12 @@ services:
     volumes:
       - ./config/models.yaml:/app/config/models.yaml:ro
       - /nfs:/nfs:ro
+      - /home/wuxinze/.cache/huggingface:/home/wuxinze/.cache/huggingface:ro
       - /tmp/vllm-qwen3-lite-env:/tmp/vllm-qwen3-lite-env:ro
+      - /home/wuxinze/unlimited-ocr-local/.conda:/home/wuxinze/unlimited-ocr-local/.conda:ro
       - /usr/local/cuda:/usr/local/cuda:ro
+      - /usr/lib/x86_64-linux-gnu/libcuda.so:/usr/local/nvidia/lib64/libcuda.so:ro
+      - /usr/lib/x86_64-linux-gnu/libcuda.so.1:/usr/local/nvidia/lib64/libcuda.so.1:ro
+      - /usr/lib/x86_64-linux-gnu/libnvidia-ml.so:/usr/local/nvidia/lib64/libnvidia-ml.so:ro
+      - /usr/lib/x86_64-linux-gnu/libnvidia-ml.so.1:/usr/local/nvidia/lib64/libnvidia-ml.so.1:ro
     restart: unless-stopped

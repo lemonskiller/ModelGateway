@@ -216,6 +216,7 @@ class ModelManager:
         environment["CUDA_VISIBLE_DEVICES"] = ",".join(str(gpu) for gpu in state.spec.gpu_group)
         environment["CUDA_HOME"] = environment.get("VLLM_CUDA_HOME", "/usr/local/cuda")
         cuda_library_paths = [
+            "/usr/local/nvidia/lib64",
             "/usr/local/cuda/lib64",
             "/lib/x86_64-linux-gnu",
             "/usr/lib/x86_64-linux-gnu",
