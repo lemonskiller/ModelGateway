@@ -1,11 +1,20 @@
 services:
   model-gateway:
     build: .
+    container_name: model-gateway
     network_mode: host
+    ipc: host
+    shm_size: 16gb
+    gpus: all
     environment:
       MODEL_GATEWAY_CONFIG: /app/config/models.yaml
-      MODEL_GATEWAY_API_KEY: ${MODEL_GATEWAY_API_KEY:-}
-      MODEL_GATEWAY_ADMIN_KEY: ${MODEL_GATEWAY_ADMIN_KEY:-}
+      MODEL_GATEWAY_API_KEY: ${MODEL_GATEWAY_API_KEY:-internal-service-key}
+      MODEL_GATEWAY_ADMIN_KEY: ${MODEL_GATEWAY_ADMIN_KEY:-admin-key}
+      VLLM_BIN: ${VLLM_BIN:-/tmp/vllm-qwen3-lite-env/bin/vllm}
+      VLLM_CUDA_HOME: ${VLLM_CUDA_HOME:-/usr/local/cuda}
     volumes:
       - ./config/models.yaml:/app/config/models.yaml:ro
+      - /nfs:/nfs:ro
+      - /tmp/vllm-qwen3-lite-env:/tmp/vllm-qwen3-lite-env:ro
+      - /usr/local/cuda:/usr/local/cuda:ro
     restart: unless-stopped

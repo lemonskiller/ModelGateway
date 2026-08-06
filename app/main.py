@@ -9,7 +9,7 @@ from typing import Any
 
 import httpx
 from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse, Response, StreamingResponse
+from fastapi.responses import HTMLResponse, JSONResponse, Response, StreamingResponse
 
 from .config import GatewayConfig
 from .manager import GatewayError, ModelManager, Unauthorized
@@ -49,6 +49,37 @@ def create_app(config: GatewayConfig | None = None) -> FastAPI:
     @app.exception_handler(GatewayError)
     async def gateway_error_handler(_: Request, error: GatewayError):
         return JSONResponse(status_code=error.status_code, content={"error": {"message": str(error)}})
+
+    @app.get("/model-gateway", response_class=HTMLResponse)
+    async def model_gateway_ui_redirect():
+        return Response(status_code=307, headers={"location": "/model-gateway/"})
+
+    @app.get("/model-gateway/", response_class=HTMLResponse)
+    async def model_gateway_ui():
+        return HTMLResponse(_MODEL_GATEWAY_UI)
+
+    @app.get("/model-gateway/api/models")
+    async def ui_models(request: Request):
+        service = manager(request)
+        return {
+            "object": "list",
+            "data": [
+                {
+                    "id": spec.id,
+                    "object": "model",
+                    "owned_by": "model-gateway",
+                    "root": spec.path,
+                    "status": service.states[spec.id].status,
+                }
+                for spec in loaded_config.models.values()
+                if spec.enabled
+            ],
+        }
+
+    @app.post("/model-gateway/api/chat")
+    async def ui_chat(request: Request):
+        payload: dict[str, Any] = await request.json()
+        return await _chat_completion_response(request, payload, require_client_key=False)
 
     @app.get("/healthz")
     async def healthz(request: Request):
@@ -101,9 +132,12 @@ def create_app(config: GatewayConfig | None = None) -> FastAPI:
 
     @app.post("/v1/chat/completions")
     async def chat_completions(request: Request):
-        if not _authorized(request, loaded_config.api_key):
-            return JSONResponse(status_code=401, content={"error": {"message": "invalid API key"}})
         payload: dict[str, Any] = await request.json()
+        return await _chat_completion_response(request, payload, require_client_key=True)
+
+    async def _chat_completion_response(request: Request, payload: dict[str, Any], require_client_key: bool):
+        if require_client_key and not _authorized(request, loaded_config.api_key):
+            return JSONResponse(status_code=401, content={"error": {"message": "invalid API key"}})
         model_id = str(payload.get("model", "")).strip()
         if not model_id:
             return JSONResponse(status_code=400, content={"error": {"message": "model is required"}})
@@ -212,6 +246,123 @@ def create_app(config: GatewayConfig | None = None) -> FastAPI:
 
 
 app = create_app() if os.path.exists(_config_path()) else FastAPI(title="Model Gateway")
+
+
+_MODEL_GATEWAY_UI = r'''<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>ModelGateway vLLM Test</title>
+  <style>
+    :root { color-scheme: light dark; font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+    body { margin: 0; background: #f6f7f9; color: #171b21; }
+    main { max-width: 980px; margin: 0 auto; padding: 28px 20px; }
+    h1 { font-size: 24px; margin: 0 0 16px; }
+    .toolbar { display: grid; grid-template-columns: minmax(220px, 1fr) auto auto; gap: 10px; align-items: center; margin-bottom: 14px; }
+    select, textarea, button { font: inherit; border: 1px solid #c9ced6; border-radius: 6px; background: white; color: #171b21; }
+    select, button { height: 38px; padding: 0 12px; }
+    button { cursor: pointer; background: #1f6feb; color: white; border-color: #1f6feb; font-weight: 600; }
+    button.secondary { background: white; color: #171b21; border-color: #c9ced6; }
+    button:disabled { opacity: .6; cursor: wait; }
+    textarea { width: 100%; min-height: 110px; padding: 12px; resize: vertical; box-sizing: border-box; }
+    .chat { border: 1px solid #d7dce3; border-radius: 8px; background: white; min-height: 360px; padding: 14px; margin: 14px 0; overflow: auto; }
+    .msg { white-space: pre-wrap; line-height: 1.55; margin: 0 0 14px; padding: 10px 12px; border-radius: 7px; }
+    .user { background: #eef4ff; }
+    .assistant { background: #f4f5f7; }
+    .meta { color: #667085; font-size: 13px; margin-bottom: 6px; }
+    .status { color: #667085; font-size: 13px; min-height: 20px; }
+    @media (prefers-color-scheme: dark) {
+      body { background: #111418; color: #e8eaed; }
+      select, textarea, button.secondary, .chat { background: #181c22; color: #e8eaed; border-color: #353b45; }
+      .user { background: #18263f; }
+      .assistant { background: #20242b; }
+      .status, .meta { color: #a7adb7; }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>ModelGateway vLLM Test</h1>
+    <div class="toolbar">
+      <select id="model"></select>
+      <button class="secondary" id="refresh">刷新模型</button>
+      <button id="send">发送</button>
+    </div>
+    <div class="status" id="status"></div>
+    <div class="chat" id="chat"></div>
+    <textarea id="prompt" placeholder="输入要测试的问题。Ctrl/Cmd + Enter 发送。"></textarea>
+  </main>
+  <script>
+    const modelSelect = document.querySelector('#model');
+    const refreshBtn = document.querySelector('#refresh');
+    const sendBtn = document.querySelector('#send');
+    const promptBox = document.querySelector('#prompt');
+    const chat = document.querySelector('#chat');
+    const statusEl = document.querySelector('#status');
+    const messages = [];
+    const setStatus = (text) => { statusEl.textContent = text || ''; };
+    const addMessage = (role, content) => {
+      const item = document.createElement('div');
+      item.className = `msg ${role}`;
+      item.innerHTML = `<div class="meta">${role}</div><div></div>`;
+      item.lastElementChild.textContent = content;
+      chat.appendChild(item);
+      chat.scrollTop = chat.scrollHeight;
+      return item.lastElementChild;
+    };
+    async function loadModels() {
+      setStatus('加载模型列表...');
+      const res = await fetch('api/models');
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || '加载模型失败');
+      modelSelect.innerHTML = '';
+      for (const model of data.data || []) {
+        const opt = document.createElement('option');
+        opt.value = model.id;
+        opt.textContent = `${model.id} (${model.status})`;
+        modelSelect.appendChild(opt);
+      }
+      setStatus(`已加载 ${modelSelect.options.length} 个 ModelGateway 模型`);
+    }
+    async function send() {
+      const text = promptBox.value.trim();
+      if (!text) return;
+      const model = modelSelect.value;
+      promptBox.value = '';
+      messages.push({ role: 'user', content: text });
+      addMessage('user', text);
+      const target = addMessage('assistant', '');
+      sendBtn.disabled = true;
+      setStatus(`请求 ${model}；cold 模型首次加载可能需要几分钟...`);
+      try {
+        const res = await fetch('api/chat', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ model, messages })
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error?.message || data.error || JSON.stringify(data));
+        const content = data.choices?.[0]?.message?.content || '';
+        target.textContent = content || '(空响应)';
+        messages.push({ role: 'assistant', content });
+        setStatus('完成');
+      } catch (err) {
+        target.textContent = `错误：${err.message}`;
+        setStatus('请求失败');
+      } finally {
+        sendBtn.disabled = false;
+      }
+    }
+    refreshBtn.addEventListener('click', () => loadModels().catch(err => setStatus(err.message)));
+    sendBtn.addEventListener('click', send);
+    promptBox.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) send();
+    });
+    loadModels().catch(err => setStatus(err.message));
+  </script>
+</body>
+</html>'''
 
 
 def _metric_label(value: object) -> str:

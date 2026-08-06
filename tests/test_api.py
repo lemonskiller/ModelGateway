@@ -51,6 +51,24 @@ def test_readiness_reports_no_hot_model_for_cold_only_config():
     assert response.json() == {"status": "ready"}
 
 
+def test_model_gateway_ui_serves_relative_api_client():
+    with TestClient(create_app(make_config())) as client:
+        response = client.get("/model-gateway/")
+
+    assert response.status_code == 200
+    assert "ModelGateway vLLM Test" in response.text
+    assert "fetch('api/models')" in response.text
+    assert "fetch('api/chat'" in response.text
+
+
+def test_model_gateway_ui_models_endpoint_does_not_require_client_key():
+    with TestClient(create_app(make_config())) as client:
+        response = client.get("/model-gateway/api/models")
+
+    assert response.status_code == 200
+    assert response.json()["data"][0]["id"] == "qwen3-8b"
+
+
 def test_empty_client_key_does_not_allow_models_endpoint():
     config = GatewayConfig(
         api_key="",
