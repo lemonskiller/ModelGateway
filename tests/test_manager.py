@@ -68,3 +68,22 @@ async def test_model_queue_rejects_when_full():
             pass
 
     await manager.client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_start_does_not_wait_for_hot_model_load(monkeypatch):
+    manager = ModelManager(make_config())
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def fake_ensure_ready(model_id):
+        started.set()
+        await release.wait()
+
+    monkeypatch.setattr(manager, "ensure_ready", fake_ensure_ready)
+
+    await asyncio.wait_for(manager.start(), timeout=0.1)
+    await asyncio.wait_for(started.wait(), timeout=0.1)
+
+    release.set()
+    await manager.close()

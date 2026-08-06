@@ -25,7 +25,7 @@ def _token_from_request(request: Request) -> str:
 
 
 def _authorized(request: Request, expected: str) -> bool:
-    return not expected or hmac.compare_digest(_token_from_request(request), expected)
+    return bool(expected) and hmac.compare_digest(_token_from_request(request), expected)
 
 
 def create_app(config: GatewayConfig | None = None) -> FastAPI:
@@ -112,12 +112,18 @@ def create_app(config: GatewayConfig | None = None) -> FastAPI:
         if stream:
             return await _stream_completion(request, service, model_id, payload)
         async with service.lease(model_id) as spec:
-            response = await service.client.post(
-                f"{spec.worker_api_url}/chat/completions",
-                headers={**service._worker_headers(spec), "content-type": "application/json"},
-                json=payload,
-                timeout=loaded_config.request_timeout,
-            )
+            try:
+                response = await service.client.post(
+                    f"{spec.worker_api_url}/chat/completions",
+                    headers={**service._worker_headers(spec), "content-type": "application/json"},
+                    json=payload,
+                    timeout=loaded_config.request_timeout,
+                )
+            except httpx.HTTPError as error:
+                return JSONResponse(
+                    status_code=502,
+                    content={"error": {"message": f"upstream model request failed: {error}"}},
+                )
             return Response(
                 content=response.content,
                 status_code=response.status_code,

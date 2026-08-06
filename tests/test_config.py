@@ -60,6 +60,20 @@ models:
     assert config.models["one"].gpu_group == (0,)
 
 
+def test_external_openai_model_uses_base_url():
+    spec = ModelSpec.from_mapping(
+        {
+            "id": "remote",
+            "backend": "external_openai",
+            "base_url": "http://127.0.0.1:18000",
+            "served_model_name": "remote-vllm",
+        }
+    )
+
+    assert spec.worker_api_url == "http://127.0.0.1:18000/v1"
+    assert spec.worker_root_url == "http://127.0.0.1:18000"
+
+
 def test_warm_model_enables_sleep_mode():
     spec = ModelSpec.from_mapping(
         {

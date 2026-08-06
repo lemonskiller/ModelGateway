@@ -7,6 +7,7 @@ import os
 import time
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
+from pathlib import Path
 from typing import AsyncIterator
 
 import httpx
@@ -55,26 +56,38 @@ class ModelManager:
         self.states = {model_id: WorkerState(spec) for model_id, spec in config.models.items()}
         self._group_locks: dict[tuple[int, ...], asyncio.Lock] = {}
         self._reaper_task: asyncio.Task[None] | None = None
+        self._hot_loader_task: asyncio.Task[None] | None = None
         self._closed = False
 
     async def start(self) -> None:
         self._reaper_task = asyncio.create_task(self._reaper(), name="model-gateway-reaper")
+        self._hot_loader_task = asyncio.create_task(
+            self._load_hot_models(),
+            name="model-gateway-hot-loader",
+        )
+
+    async def _load_hot_models(self) -> None:
         hot_models = [
             state.spec.id
             for state in self.states.values()
             if state.spec.enabled and state.spec.mode == "hot"
         ]
-        if hot_models:
-            results = await asyncio.gather(
-                *(self.ensure_ready(model_id) for model_id in hot_models),
-                return_exceptions=True,
-            )
-            for model_id, result in zip(hot_models, results):
-                if isinstance(result, Exception):
-                    logger.error("hot model %s failed to start: %s", model_id, result)
+        if not hot_models:
+            return
+        results = await asyncio.gather(
+            *(self.ensure_ready(model_id) for model_id in hot_models),
+            return_exceptions=True,
+        )
+        for model_id, result in zip(hot_models, results):
+            if isinstance(result, Exception):
+                logger.error("hot model %s failed to start: %s", model_id, result)
 
     async def close(self) -> None:
         self._closed = True
+        if self._hot_loader_task:
+            self._hot_loader_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._hot_loader_task
         if self._reaper_task:
             self._reaper_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
@@ -96,6 +109,8 @@ class ModelManager:
         return {
             "id": state.spec.id,
             "served_model_name": state.spec.served_model_name,
+            "backend": state.spec.backend,
+            "base_url": state.spec.base_url,
             "gpu_group": list(state.spec.gpu_group),
             "mode": state.spec.mode,
             "priority": state.spec.priority,
@@ -144,6 +159,9 @@ class ModelManager:
             if state.status == "SLEEPING":
                 await self._wake_worker(state)
                 return
+            if spec.backend != "managed_vllm":
+                await self._check_external_worker(state)
+                return
             await self._evict_conflicts(spec)
             await self._start_worker(state)
 
@@ -153,6 +171,9 @@ class ModelManager:
         async with lock:
             state = self.states[model_id]
             await self._drain(state)
+            if state.spec.backend != "managed_vllm":
+                state.status = "STOPPED"
+                return
             await self._stop_worker(state)
 
     async def sleep(self, model_id: str) -> None:
@@ -161,6 +182,9 @@ class ModelManager:
         async with lock:
             state = self.states[model_id]
             await self._drain(state)
+            if state.spec.backend != "managed_vllm":
+                state.status = "STOPPED"
+                return
             if state.status == "READY":
                 await self._sleep_worker(state)
 
@@ -188,7 +212,19 @@ class ModelManager:
     async def _start_worker(self, state: WorkerState) -> None:
         state.status = "STARTING"
         environment = os.environ.copy()
+        environment["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
         environment["CUDA_VISIBLE_DEVICES"] = ",".join(str(gpu) for gpu in state.spec.gpu_group)
+        environment["CUDA_HOME"] = environment.get("VLLM_CUDA_HOME", "/usr/local/cuda")
+        cuda_library_paths = [
+            "/usr/local/cuda/lib64",
+            "/lib/x86_64-linux-gnu",
+            "/usr/lib/x86_64-linux-gnu",
+        ]
+        cuda_library_paths.extend(_python_env_library_paths(self.config.vllm_binary))
+        existing_library_path = environment.get("LD_LIBRARY_PATH")
+        if existing_library_path:
+            cuda_library_paths.append(existing_library_path)
+        environment["LD_LIBRARY_PATH"] = ":".join(cuda_library_paths)
         if state.spec.mode == "warm":
             environment["VLLM_SERVER_DEV_MODE"] = "1"
 
@@ -207,6 +243,21 @@ class ModelManager:
             await self._stop_worker(state)
             state.status = "FAILED"
             raise ModelUnavailable(f"failed to start model {state.spec.id}: {error}") from error
+
+    async def _check_external_worker(self, state: WorkerState) -> None:
+        state.status = "CHECKING"
+        try:
+            response = await self.client.get(
+                f"{state.spec.worker_api_url}/models",
+                headers=self._worker_headers(state.spec),
+                timeout=5,
+            )
+            response.raise_for_status()
+            state.status = "READY"
+            state.last_used = time.monotonic()
+        except Exception as error:
+            state.status = "FAILED"
+            raise ModelUnavailable(f"external model {state.spec.id} is unavailable: {error}") from error
 
     async def _wait_ready(self, state: WorkerState) -> None:
         deadline = time.monotonic() + self.config.startup_timeout
@@ -309,3 +360,12 @@ class ModelManager:
         if spec.worker_api_key:
             return {"Authorization": f"Bearer {spec.worker_api_key}"}
         return {}
+
+
+def _python_env_library_paths(binary: str) -> list[str]:
+    env_root = Path(binary).resolve().parent.parent
+    paths: list[str] = []
+    for candidate in (env_root / "lib").glob("python*/site-packages/nvidia/**/lib"):
+        if candidate.is_dir():
+            paths.append(str(candidate))
+    return paths

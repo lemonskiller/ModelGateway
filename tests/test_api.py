@@ -49,3 +49,25 @@ def test_readiness_reports_no_hot_model_for_cold_only_config():
 
     assert response.status_code == 200
     assert response.json() == {"status": "ready"}
+
+
+def test_empty_client_key_does_not_allow_models_endpoint():
+    config = GatewayConfig(
+        api_key="",
+        admin_key="admin-key",
+        models={
+            "qwen3-8b": ModelSpec(
+                "qwen3-8b",
+                "/models/qwen3",
+                "qwen3-8b",
+                (0,),
+                9101,
+                mode="cold",
+            )
+        },
+    )
+
+    with TestClient(create_app(config)) as client:
+        response = client.get("/v1/models")
+
+    assert response.status_code == 401
