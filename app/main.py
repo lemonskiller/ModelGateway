@@ -284,4 +284,64 @@ def _render_metrics(service: ModelManager) -> str:
         lines.append(f"model_gateway_model_pending_requests{{{dynamic_labels}}} {state.pending_requests}")
         lines.append(f"model_gateway_model_last_used_seconds{{{dynamic_labels}}} {state.last_used}")
 
+    lines.extend([
+        "# HELP model_manager_model_state Model manager state by model and deployment backend.",
+        "# TYPE model_manager_model_state gauge",
+    ])
+    manager_states = {
+        "STOPPED": "STOPPED",
+        "STARTING": "STARTING",
+        "CHECKING": "STARTING",
+        "READY": "READY",
+        "SLEEPING": "SLEEPING",
+        "WAKING": "WAKING",
+        "DRAINING": "DRAINING",
+        "FAILED": "FAILED",
+    }
+    for state in service.states.values():
+        spec = state.spec
+        active_state = manager_states.get(state.status, state.status)
+        for status in sorted(set(manager_states.values())):
+            lines.append(
+                "model_manager_model_state{"
+                + _labels({
+                    "model": spec.id,
+                    "state": status,
+                    "backend": spec.backend,
+                    "mode": spec.mode,
+                    "gpu_group": ",".join(str(gpu) for gpu in spec.gpu_group),
+                    "worker_id": str(spec.port or spec.base_url or ""),
+                    "priority": spec.priority,
+                    "alert_email_group": "model-gateway-default",
+                })
+                + f"}} {1 if active_state == status else 0}"
+            )
+
+    lines.extend([
+        "# HELP model_manager_queue_size Requests waiting for a model manager lease.",
+        "# TYPE model_manager_queue_size gauge",
+        "# HELP model_manager_gpu_lock_held Whether a GPU group lock is currently held.",
+        "# TYPE model_manager_gpu_lock_held gauge",
+        "# HELP model_manager_model_last_used_timestamp_seconds Last model use timestamp as reported by the manager.",
+        "# TYPE model_manager_model_last_used_timestamp_seconds gauge",
+    ])
+    locked_gpu_groups = {
+        ",".join(str(gpu) for gpu in gpu_group)
+        for gpu_group, lock in service._group_locks.items()
+        if lock.locked()
+    }
+    for state in service.states.values():
+        spec = state.spec
+        gpu_group = ",".join(str(gpu) for gpu in spec.gpu_group)
+        manager_labels = _labels({
+            "model": spec.id,
+            "backend": spec.backend,
+            "mode": spec.mode,
+            "gpu_group": gpu_group,
+            "alert_email_group": "model-gateway-default",
+        })
+        lines.append(f"model_manager_queue_size{{{manager_labels}}} {state.pending_requests}")
+        lines.append(f"model_manager_gpu_lock_held{{{manager_labels}}} {1 if gpu_group in locked_gpu_groups else 0}")
+        lines.append(f"model_manager_model_last_used_timestamp_seconds{{{manager_labels}}} {state.last_used}")
+
     return "\n".join(lines) + "\n"

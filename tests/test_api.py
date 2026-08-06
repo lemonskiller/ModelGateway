@@ -86,3 +86,6 @@ def test_metrics_expose_model_status_by_backend_and_mode():
     assert 'status="STOPPED"' in body
     assert "model_gateway_model_active_requests" in body
     assert "model_gateway_model_pending_requests" in body
+    assert 'model_manager_model_state{model="qwen3-8b",state="STOPPED",backend="managed_vllm"' in body
+    assert "model_manager_queue_size" in body
+    assert "model_manager_gpu_lock_held" in body
