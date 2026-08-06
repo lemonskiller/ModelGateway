@@ -72,9 +72,10 @@ def create_app(config: GatewayConfig | None = None) -> FastAPI:
         return {"status": "ready"}
 
     @app.get("/metrics")
-    async def metrics():
+    async def metrics(request: Request):
+        service = manager(request)
         return Response(
-            content="# Model Gateway metrics are intentionally minimal in v0.1.0.\n",
+            content=_render_metrics(service),
             media_type="text/plain; version=0.0.4",
         )
 
@@ -211,3 +212,76 @@ def create_app(config: GatewayConfig | None = None) -> FastAPI:
 
 
 app = create_app() if os.path.exists(_config_path()) else FastAPI(title="Model Gateway")
+
+
+def _metric_label(value: object) -> str:
+    return str(value).replace("\\", "\\\\").replace("\n", "\\n").replace('"', '\\"')
+
+
+def _labels(values: dict[str, object]) -> str:
+    return ",".join(f'{name}="{_metric_label(value)}"' for name, value in values.items())
+
+
+def _render_metrics(service: ModelManager) -> str:
+    statuses = ("STOPPED", "STARTING", "CHECKING", "READY", "SLEEPING", "WAKING", "DRAINING", "FAILED")
+    lines = [
+        "# HELP model_gateway_up Whether the Model Gateway process is serving metrics.",
+        "# TYPE model_gateway_up gauge",
+        "model_gateway_up 1",
+        "# HELP model_gateway_model_info Static Model Gateway model registration metadata.",
+        "# TYPE model_gateway_model_info gauge",
+    ]
+    for state in service.states.values():
+        spec = state.spec
+        base_labels = {
+            "model": spec.id,
+            "served_model_name": spec.served_model_name,
+            "backend": spec.backend,
+            "mode": spec.mode,
+            "gpu_group": ",".join(str(gpu) for gpu in spec.gpu_group),
+            "port": spec.port,
+            "enabled": int(spec.enabled),
+        }
+        lines.append(f"model_gateway_model_info{{{_labels(base_labels)}}} 1")
+
+    lines.extend([
+        "# HELP model_gateway_model_status Model state by deployment backend and serving mode.",
+        "# TYPE model_gateway_model_status gauge",
+    ])
+    for state in service.states.values():
+        spec = state.spec
+        for status in statuses:
+            lines.append(
+                "model_gateway_model_status{"
+                + _labels({
+                    "model": spec.id,
+                    "served_model_name": spec.served_model_name,
+                    "backend": spec.backend,
+                    "mode": spec.mode,
+                    "status": status,
+                    "gpu_group": ",".join(str(gpu) for gpu in spec.gpu_group),
+                })
+                + f"}} {1 if state.status == status else 0}"
+            )
+
+    lines.extend([
+        "# HELP model_gateway_model_active_requests Active requests currently leased to a model.",
+        "# TYPE model_gateway_model_active_requests gauge",
+        "# HELP model_gateway_model_pending_requests Requests waiting for a model to become ready.",
+        "# TYPE model_gateway_model_pending_requests gauge",
+        "# HELP model_gateway_model_last_used_seconds Monotonic timestamp of last model use.",
+        "# TYPE model_gateway_model_last_used_seconds gauge",
+    ])
+    for state in service.states.values():
+        spec = state.spec
+        dynamic_labels = _labels({
+            "model": spec.id,
+            "served_model_name": spec.served_model_name,
+            "backend": spec.backend,
+            "mode": spec.mode,
+        })
+        lines.append(f"model_gateway_model_active_requests{{{dynamic_labels}}} {state.active_requests}")
+        lines.append(f"model_gateway_model_pending_requests{{{dynamic_labels}}} {state.pending_requests}")
+        lines.append(f"model_gateway_model_last_used_seconds{{{dynamic_labels}}} {state.last_used}")
+
+    return "\n".join(lines) + "\n"

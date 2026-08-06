@@ -71,3 +71,18 @@ def test_empty_client_key_does_not_allow_models_endpoint():
         response = client.get("/v1/models")
 
     assert response.status_code == 401
+
+
+def test_metrics_expose_model_status_by_backend_and_mode():
+    with TestClient(create_app(make_config())) as client:
+        response = client.get("/metrics")
+
+    assert response.status_code == 200
+    body = response.text
+    assert "model_gateway_up 1" in body
+    assert 'model_gateway_model_info{model="qwen3-8b"' in body
+    assert 'backend="managed_vllm"' in body
+    assert 'mode="cold"' in body
+    assert 'status="STOPPED"' in body
+    assert "model_gateway_model_active_requests" in body
+    assert "model_gateway_model_pending_requests" in body
