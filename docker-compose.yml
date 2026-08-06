@@ -5,7 +5,15 @@ services:
     network_mode: host
     ipc: host
     shm_size: 16gb
-    gpus: all
+    privileged: true
+    devices:
+      - /dev/nvidiactl:/dev/nvidiactl
+      - /dev/nvidia-uvm:/dev/nvidia-uvm
+      - /dev/nvidia-uvm-tools:/dev/nvidia-uvm-tools
+      - /dev/nvidia0:/dev/nvidia0
+      - /dev/nvidia1:/dev/nvidia1
+      - /dev/nvidia2:/dev/nvidia2
+      - /dev/nvidia3:/dev/nvidia3
     environment:
       MODEL_GATEWAY_CONFIG: /app/config/models.yaml
       MODEL_GATEWAY_API_KEY: ${MODEL_GATEWAY_API_KEY:-internal-service-key}
