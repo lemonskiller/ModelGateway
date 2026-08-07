@@ -215,13 +215,14 @@ class ModelManager:
         environment["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
         environment["CUDA_VISIBLE_DEVICES"] = ",".join(str(gpu) for gpu in state.spec.gpu_group)
         environment["CUDA_HOME"] = environment.get("VLLM_CUDA_HOME", "/usr/local/cuda")
+        vllm_binary = state.spec.vllm_binary or self.config.vllm_binary
         cuda_library_paths = [
             "/usr/local/nvidia/lib64",
             "/usr/local/cuda/lib64",
             "/lib/x86_64-linux-gnu",
             "/usr/lib/x86_64-linux-gnu",
         ]
-        cuda_library_paths.extend(_python_env_library_paths(self.config.vllm_binary))
+        cuda_library_paths.extend(_python_env_library_paths(vllm_binary))
         existing_library_path = environment.get("LD_LIBRARY_PATH")
         if existing_library_path:
             cuda_library_paths.append(existing_library_path)
@@ -231,7 +232,7 @@ class ModelManager:
 
         try:
             state.process = await asyncio.create_subprocess_exec(
-                *state.spec.vllm_command(self.config.vllm_binary),
+                *state.spec.vllm_command(vllm_binary),
                 env=environment,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.STDOUT,

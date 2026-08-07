@@ -25,6 +25,7 @@ services:
       - /nfs:/nfs:ro
       - /home/wuxinze/.cache/huggingface:/home/wuxinze/.cache/huggingface:ro
       - /tmp/vllm-qwen3-lite-env:/tmp/vllm-qwen3-lite-env:ro
+      - /tmp/vllm-qwen35-env:/tmp/vllm-qwen35-env:ro
       - /home/wuxinze/unlimited-ocr-local/.conda:/home/wuxinze/unlimited-ocr-local/.conda:ro
       - /usr/local/cuda:/usr/local/cuda:ro
       - /usr/lib/x86_64-linux-gnu/libcuda.so:/usr/local/nvidia/lib64/libcuda.so:ro

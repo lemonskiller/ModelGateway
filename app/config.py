@@ -33,6 +33,7 @@ class ModelSpec:
     extra_args: tuple[str, ...] = field(default_factory=tuple)
     worker_api_key: str = ""
     enabled: bool = True
+    vllm_binary: str | None = None
 
     @classmethod
     def from_mapping(cls, value: dict[str, Any]) -> "ModelSpec":
@@ -85,6 +86,7 @@ class ModelSpec:
             extra_args=tuple(str(arg) for arg in value.get("extra_args", [])),
             worker_api_key=str(value.get("worker_api_key", "")),
             enabled=bool(value.get("enabled", True)),
+            vllm_binary=str(value["vllm_binary"]) if value.get("vllm_binary") else None,
         )
 
     def vllm_command(self, binary: str = "vllm") -> list[str]:

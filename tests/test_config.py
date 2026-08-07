@@ -60,6 +60,21 @@ models:
     assert config.models["one"].gpu_group == (0,)
 
 
+def test_model_can_override_vllm_binary():
+    spec = ModelSpec.from_mapping(
+        {
+            "id": "new-runtime",
+            "path": "/models/new",
+            "served_model_name": "new-runtime",
+            "gpu_group": [2, 3],
+            "port": 9104,
+            "vllm_binary": "/opt/vllm-new/bin/vllm",
+        }
+    )
+
+    assert spec.vllm_binary == "/opt/vllm-new/bin/vllm"
+
+
 def test_external_openai_model_uses_base_url():
     spec = ModelSpec.from_mapping(
         {
