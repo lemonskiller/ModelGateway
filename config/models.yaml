@@ -16,12 +16,14 @@ models:
     served_model_name: qwen3:0.6b-vllm
     gpu_group: [0]
     port: 9101
-    mode: cold
+    mode: warm
+    preload: true
     priority: 100
     max_model_len: 4096
     max_num_seqs: 4
     max_num_batched_tokens: 4096
     gpu_memory_utilization: 0.70
+    safetensors_load_strategy: eager
     extra_args: ["--dtype", "half", "--trust-remote-code"]
 
   - id: qwen3:8b-vllm
@@ -30,13 +32,15 @@ models:
     served_model_name: qwen3:8b-vllm
     gpu_group: [0, 1]
     port: 9102
-    mode: cold
+    mode: warm
+    preload: true
     priority: 90
     max_model_len: 2048
     max_num_seqs: 1
     max_num_batched_tokens: 2048
     gpu_memory_utilization: 0.70
     tensor_parallel_size: 2
+    safetensors_load_strategy: eager
     extra_args: ["--dtype", "half", "--trust-remote-code", "--enforce-eager", "--cpu-offload-gb", "2", "--disable-custom-all-reduce"]
 
   - id: deepseek-r1:7b-vllm
@@ -45,13 +49,15 @@ models:
     served_model_name: deepseek-r1:7b-vllm
     gpu_group: [0, 1]
     port: 9103
-    mode: cold
+    mode: warm
+    preload: true
     priority: 80
     max_model_len: 2048
     max_num_seqs: 1
     max_num_batched_tokens: 2048
     gpu_memory_utilization: 0.70
     tensor_parallel_size: 2
+    safetensors_load_strategy: eager
     extra_args: ["--dtype", "half", "--trust-remote-code", "--enforce-eager", "--cpu-offload-gb", "2", "--disable-custom-all-reduce"]
 
   - id: qwen3.6:27b-vllm
@@ -61,11 +67,13 @@ models:
     gpu_group: [2, 3]
     port: 9104
     vllm_binary: /tmp/vllm-qwen35-env/bin/vllm
-    mode: cold
+    mode: warm
+    preload: true
     priority: 85
     max_model_len: 8192
     max_num_seqs: 2
     max_num_batched_tokens: 2048
     gpu_memory_utilization: 0.82
     tensor_parallel_size: 2
+    safetensors_load_strategy: eager
     extra_args: ["--dtype", "bfloat16", "--trust-remote-code", "--disable-custom-all-reduce"]

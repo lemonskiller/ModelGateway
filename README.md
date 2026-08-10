@@ -36,7 +36,7 @@ docker compose up -d --build
 
 ```text
 /healthz  进程存活检查
-/readyz   Hot 模型就绪检查；未就绪时返回 503
+/readyz   Hot/预热模型就绪检查；未完成预热时返回 503
 ```
 
 如果使用环境变量配置密钥：
@@ -66,6 +66,22 @@ curl http://127.0.0.1:8000/v1/chat/completions \
 curl -X POST http://127.0.0.1:8000/admin/models/qwen3-8b/load \
   -H 'Authorization: Bearer admin-key'
 ```
+
+## 加速首次加载和模型切换
+
+对需要频繁切换的模型使用以下配置：
+
+```yaml
+mode: warm
+preload: true
+safetensors_load_strategy: eager
+```
+
+- `preload: true`：Gateway 启动后在后台完成首次加载；`/readyz` 会在预热完成前返回 503。
+- `mode: warm`：模型被切换出去时使用 vLLM Sleep Mode level 1，将权重保留在 CPU 内存；再次使用时从 CPU 恢复到 GPU，避免重新启动进程和读取权重文件。
+- `safetensors_load_strategy: eager`：适合当前 `/nfs` 模型目录，避免网络文件系统上的大量随机读取。它会在加载时增加 CPU 内存峰值。
+
+共享 GPU 的 warm 模型会依次预热，使用不同 GPU 的模型可以并行预热。每个 warm 模型需要足够的 CPU 内存保存一份休眠权重；如果内存不足，只给常用模型配置 `preload: true`，其余模型保留 `mode: cold`。
 
 ## 接入 NextOffer
 

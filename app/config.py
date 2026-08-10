@@ -34,6 +34,8 @@ class ModelSpec:
     worker_api_key: str = ""
     enabled: bool = True
     vllm_binary: str | None = None
+    preload: bool = False
+    safetensors_load_strategy: str | None = None
 
     @classmethod
     def from_mapping(cls, value: dict[str, Any]) -> "ModelSpec":
@@ -73,6 +75,7 @@ class ModelSpec:
             gpu_group=gpu_group,
             port=int(value.get("port", 0)),
             mode=mode,
+            preload=bool(value.get("preload", False)),
             backend=backend,
             base_url=_normalize_base_url(value.get("base_url")),
             priority=int(value.get("priority", 0)),
@@ -83,6 +86,11 @@ class ModelSpec:
             max_num_batched_tokens=_optional_int(value.get("max_num_batched_tokens")),
             gpu_memory_utilization=float(value.get("gpu_memory_utilization", 0.82)),
             tensor_parallel_size=_optional_int(value.get("tensor_parallel_size")),
+            safetensors_load_strategy=(
+                str(value["safetensors_load_strategy"])
+                if value.get("safetensors_load_strategy")
+                else None
+            ),
             extra_args=tuple(str(arg) for arg in value.get("extra_args", [])),
             worker_api_key=str(value.get("worker_api_key", "")),
             enabled=bool(value.get("enabled", True)),
@@ -99,6 +107,8 @@ class ModelSpec:
             command.extend(["--max-num-seqs", str(self.max_num_seqs)])
         if self.max_num_batched_tokens is not None:
             command.extend(["--max-num-batched-tokens", str(self.max_num_batched_tokens)])
+        if self.safetensors_load_strategy:
+            command.extend(["--safetensors-load-strategy", self.safetensors_load_strategy])
         if self.gpu_memory_utilization:
             command.extend(["--gpu-memory-utilization", str(self.gpu_memory_utilization)])
         if self.tensor_parallel_size is not None:

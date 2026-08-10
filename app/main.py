@@ -95,10 +95,22 @@ def create_app(config: GatewayConfig | None = None) -> FastAPI:
             for item in snapshots
             if item["mode"] == "hot" and item["status"] != "READY"
         ]
-        if hot_failed:
+        preload_failed = [
+            item["id"]
+            for item in snapshots
+            if item["preload"]
+            and item["mode"] != "hot"
+            and item["status"] not in {"READY", "SLEEPING"}
+        ]
+        if hot_failed or preload_failed:
+            content: dict[str, object] = {"status": "not_ready"}
+            if hot_failed:
+                content["hot_models"] = hot_failed
+            if preload_failed:
+                content["preload_models"] = preload_failed
             return JSONResponse(
                 status_code=503,
-                content={"status": "not_ready", "hot_models": hot_failed},
+                content=content,
             )
         return {"status": "ready"}
 
@@ -334,7 +346,7 @@ _MODEL_GATEWAY_UI = r'''<!doctype html>
       addMessage('user', text);
       const target = addMessage('assistant', '');
       sendBtn.disabled = true;
-      setStatus(`请求 ${model}；cold 模型首次加载可能需要几分钟...`);
+      setStatus(`请求 ${model}；未就绪模型将自动加载或唤醒...`);
       try {
         const res = await fetch('api/chat', {
           method: 'POST',
@@ -476,11 +488,6 @@ def _render_metrics(service: ModelManager) -> str:
         "# HELP model_manager_model_last_used_timestamp_seconds Last model use timestamp as reported by the manager.",
         "# TYPE model_manager_model_last_used_timestamp_seconds gauge",
     ])
-    locked_gpu_groups = {
-        ",".join(str(gpu) for gpu in gpu_group)
-        for gpu_group, lock in service._group_locks.items()
-        if lock.locked()
-    }
     for state in service.states.values():
         spec = state.spec
         gpu_group = ",".join(str(gpu) for gpu in spec.gpu_group)
@@ -492,7 +499,10 @@ def _render_metrics(service: ModelManager) -> str:
             "alert_email_group": "model-gateway-default",
         })
         lines.append(f"model_manager_queue_size{{{manager_labels}}} {state.pending_requests}")
-        lines.append(f"model_manager_gpu_lock_held{{{manager_labels}}} {1 if gpu_group in locked_gpu_groups else 0}")
+        lines.append(
+            f"model_manager_gpu_lock_held{{{manager_labels}}} "
+            f"{1 if service.gpu_group_locked(spec.gpu_group) else 0}"
+        )
         lines.append(f"model_manager_model_last_used_timestamp_seconds{{{manager_labels}}} {state.last_used}")
 
     return "\n".join(lines) + "\n"

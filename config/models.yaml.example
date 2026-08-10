@@ -17,10 +17,12 @@ models:
     served_model_name: qwen3-8b
     gpu_group: [0]
     port: 9101
-    mode: hot
+    mode: warm
+    preload: true
     priority: 100
     idle_ttl: 1800
     quantization: awq
+    safetensors_load_strategy: eager
     max_model_len: 8192
     max_num_seqs: 8
     max_num_batched_tokens: 2048
@@ -31,10 +33,12 @@ models:
     served_model_name: qwen3-14b
     gpu_group: [0]
     port: 9102
-    mode: cold
+    mode: warm
+    preload: true
     priority: 50
     idle_ttl: 600
     quantization: awq
+    safetensors_load_strategy: eager
     max_model_len: 8192
     max_num_seqs: 4
     max_num_batched_tokens: 1024

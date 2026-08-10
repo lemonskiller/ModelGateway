@@ -98,7 +98,12 @@ def test_warm_model_enables_sleep_mode():
             "gpu_group": [0],
             "port": 9102,
             "mode": "warm",
+            "preload": True,
+            "safetensors_load_strategy": "eager",
         }
     )
 
     assert "--enable-sleep-mode" in spec.vllm_command()
+    assert "--safetensors-load-strategy" in spec.vllm_command()
+    assert "eager" in spec.vllm_command()
+    assert spec.preload is True

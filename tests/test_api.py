@@ -1,7 +1,10 @@
+import asyncio
+
 from fastapi.testclient import TestClient
 
 from app.config import GatewayConfig, ModelSpec
 from app.main import create_app
+from app.manager import ModelManager
 
 
 def make_config() -> GatewayConfig:
@@ -45,6 +48,37 @@ def test_admin_endpoint_requires_admin_key():
 
 def test_readiness_reports_no_hot_model_for_cold_only_config():
     with TestClient(create_app(make_config())) as client:
+        response = client.get("/readyz")
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "ready"}
+
+
+def test_readiness_waits_for_preloaded_warm_model(monkeypatch):
+    async def wait_for_cancellation(_manager):
+        await asyncio.Future()
+
+    monkeypatch.setattr(ModelManager, "_preload_models", wait_for_cancellation)
+    spec = ModelSpec(
+        "warm",
+        "/models/warm",
+        "warm",
+        (0,),
+        9101,
+        mode="warm",
+        preload=True,
+    )
+    app = create_app(GatewayConfig(models={"warm": spec}))
+
+    with TestClient(app) as client:
+        response = client.get("/readyz")
+        assert response.status_code == 503
+        assert response.json() == {
+            "status": "not_ready",
+            "preload_models": ["warm"],
+        }
+
+        app.state.manager.states["warm"].status = "SLEEPING"
         response = client.get("/readyz")
 
     assert response.status_code == 200

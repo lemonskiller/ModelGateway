@@ -54,40 +54,50 @@ class ModelManager:
         # Worker traffic is private/local and must not inherit shell HTTP(S)_PROXY settings.
         self.client = client or httpx.AsyncClient(trust_env=False)
         self.states = {model_id: WorkerState(spec) for model_id, spec in config.models.items()}
-        self._group_locks: dict[tuple[int, ...], asyncio.Lock] = {}
+        self._gpu_locks: dict[int, asyncio.Lock] = {
+            gpu: asyncio.Lock()
+            for state in self.states.values()
+            for gpu in state.spec.gpu_group
+        }
         self._reaper_task: asyncio.Task[None] | None = None
-        self._hot_loader_task: asyncio.Task[None] | None = None
+        self._preload_task: asyncio.Task[None] | None = None
         self._closed = False
 
     async def start(self) -> None:
         self._reaper_task = asyncio.create_task(self._reaper(), name="model-gateway-reaper")
-        self._hot_loader_task = asyncio.create_task(
-            self._load_hot_models(),
-            name="model-gateway-hot-loader",
+        self._preload_task = asyncio.create_task(
+            self._preload_models(),
+            name="model-gateway-preloader",
         )
 
-    async def _load_hot_models(self) -> None:
-        hot_models = [
+    async def _preload_models(self) -> None:
+        preload_models = [
             state.spec.id
             for state in self.states.values()
-            if state.spec.enabled and state.spec.mode == "hot"
+            if state.spec.enabled and (state.spec.mode == "hot" or state.spec.preload)
         ]
-        if not hot_models:
+        if not preload_models:
             return
         results = await asyncio.gather(
-            *(self.ensure_ready(model_id) for model_id in hot_models),
+            *(self._preload_model(model_id) for model_id in preload_models),
             return_exceptions=True,
         )
-        for model_id, result in zip(hot_models, results):
+        for model_id, result in zip(preload_models, results):
             if isinstance(result, Exception):
-                logger.error("hot model %s failed to start: %s", model_id, result)
+                logger.error("preloaded model %s failed to start: %s", model_id, result)
+
+    async def _preload_model(self, model_id: str) -> None:
+        await self.ensure_ready(model_id)
+        spec = self.states[model_id].spec
+        if spec.backend == "managed_vllm" and spec.mode == "warm":
+            await self.sleep(model_id)
 
     async def close(self) -> None:
         self._closed = True
-        if self._hot_loader_task:
-            self._hot_loader_task.cancel()
+        if self._preload_task:
+            self._preload_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
-                await self._hot_loader_task
+                await self._preload_task
         if self._reaper_task:
             self._reaper_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
@@ -113,6 +123,7 @@ class ModelManager:
             "base_url": state.spec.base_url,
             "gpu_group": list(state.spec.gpu_group),
             "mode": state.spec.mode,
+            "preload": state.spec.preload,
             "priority": state.spec.priority,
             "status": state.status,
             "active_requests": state.active_requests,
@@ -151,12 +162,12 @@ class ModelManager:
             state.last_used = time.monotonic()
             return
 
-        lock = self._group_locks.setdefault(spec.gpu_group, asyncio.Lock())
-        async with lock:
+        async with self._reserve_gpus(spec.gpu_group):
             if state.status == "READY":
                 state.last_used = time.monotonic()
                 return
             if state.status == "SLEEPING":
+                await self._evict_conflicts(spec)
                 await self._wake_worker(state)
                 return
             if spec.backend != "managed_vllm":
@@ -167,8 +178,7 @@ class ModelManager:
 
     async def unload(self, model_id: str) -> None:
         spec = self.get_spec(model_id)
-        lock = self._group_locks.setdefault(spec.gpu_group, asyncio.Lock())
-        async with lock:
+        async with self._reserve_gpus(spec.gpu_group):
             state = self.states[model_id]
             await self._drain(state)
             if state.spec.backend != "managed_vllm":
@@ -178,13 +188,14 @@ class ModelManager:
 
     async def sleep(self, model_id: str) -> None:
         spec = self.get_spec(model_id)
-        lock = self._group_locks.setdefault(spec.gpu_group, asyncio.Lock())
-        async with lock:
+        async with self._reserve_gpus(spec.gpu_group):
             state = self.states[model_id]
             await self._drain(state)
             if state.spec.backend != "managed_vllm":
                 state.status = "STOPPED"
                 return
+            if state.spec.mode != "warm":
+                raise ModelUnavailable(f"model {model_id} is not configured for warm sleep")
             if state.status == "READY":
                 await self._sleep_worker(state)
 
@@ -197,7 +208,7 @@ class ModelManager:
             state
             for state in self.states.values()
             if state.spec.id != target.id
-            and state.status in {"READY", "SLEEPING"}
+            and state.status == "READY"
             and target_gpus.intersection(state.spec.gpu_group)
         ]
         conflicts.sort(key=lambda item: (item.spec.mode == "hot", item.spec.priority, item.last_used))
@@ -207,7 +218,14 @@ class ModelManager:
                     f"GPU group {target.gpu_group} is occupied by hot model {state.spec.id}"
                 )
             await self._drain(state)
-            await self._stop_worker(state)
+            if state.spec.mode == "warm":
+                try:
+                    await self._sleep_worker(state)
+                except Exception:
+                    logger.exception("failed to sleep conflicting model %s; stopping it", state.spec.id)
+                    await self._stop_worker(state)
+            else:
+                await self._stop_worker(state)
 
     async def _start_worker(self, state: WorkerState) -> None:
         state.status = "STARTING"
@@ -293,6 +311,7 @@ class ModelManager:
             state.status = "READY"
             state.last_used = time.monotonic()
         except Exception as error:
+            await self._stop_worker(state)
             state.status = "FAILED"
             raise ModelUnavailable(f"failed to wake model {state.spec.id}: {error}") from error
 
@@ -306,6 +325,8 @@ class ModelManager:
         state.status = "SLEEPING"
 
     async def _drain(self, state: WorkerState) -> None:
+        if not state.active_requests:
+            return
         state.status = "DRAINING"
         deadline = time.monotonic() + self.config.drain_timeout
         while state.active_requests and time.monotonic() < deadline:
@@ -356,6 +377,22 @@ class ModelManager:
                         await self.unload(state.spec.id)
                 except Exception:
                     logger.exception("failed to reap model %s", state.spec.id)
+
+    @asynccontextmanager
+    async def _reserve_gpus(self, gpu_group: tuple[int, ...]) -> AsyncIterator[None]:
+        locks = [self._gpu_locks.setdefault(gpu, asyncio.Lock()) for gpu in sorted(set(gpu_group))]
+        acquired: list[asyncio.Lock] = []
+        try:
+            for lock in locks:
+                await lock.acquire()
+                acquired.append(lock)
+            yield
+        finally:
+            for lock in reversed(acquired):
+                lock.release()
+
+    def gpu_group_locked(self, gpu_group: tuple[int, ...]) -> bool:
+        return any(self._gpu_locks[gpu].locked() for gpu in gpu_group if gpu in self._gpu_locks)
 
     @staticmethod
     def _worker_headers(spec: ModelSpec) -> dict[str, str]:

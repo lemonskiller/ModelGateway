@@ -16,12 +16,14 @@ models:
     served_model_name: qwen3:0.6b-vllm
     gpu_group: [1]
     port: 9101
-    mode: hot
+    mode: warm
+    preload: true
     priority: 100
     max_model_len: 4096
     max_num_seqs: 4
     max_num_batched_tokens: 4096
     gpu_memory_utilization: 0.70
+    safetensors_load_strategy: eager
     extra_args: ["--dtype", "half", "--trust-remote-code"]
 
   - id: qwen3.5:0.8b-vllm
@@ -30,12 +32,14 @@ models:
     served_model_name: qwen3.5:0.8b-vllm
     gpu_group: [1]
     port: 9102
-    mode: cold
+    mode: warm
+    preload: true
     priority: 95
     max_model_len: 4096
     max_num_seqs: 2
     max_num_batched_tokens: 4096
     gpu_memory_utilization: 0.70
+    safetensors_load_strategy: eager
     extra_args: ["--dtype", "half", "--trust-remote-code"]
 
   - id: qwen3:8b-vllm
@@ -44,12 +48,14 @@ models:
     served_model_name: qwen3:8b-vllm
     gpu_group: [2]
     port: 9103
-    mode: cold
+    mode: warm
+    preload: true
     priority: 90
     max_model_len: 8192
     max_num_seqs: 4
     max_num_batched_tokens: 8192
     gpu_memory_utilization: 0.82
+    safetensors_load_strategy: eager
     extra_args: ["--dtype", "half", "--trust-remote-code"]
 
   - id: qwen3.5:9b-vllm
@@ -58,12 +64,14 @@ models:
     served_model_name: qwen3.5:9b-vllm
     gpu_group: [2]
     port: 9104
-    mode: cold
+    mode: warm
+    preload: true
     priority: 85
     max_model_len: 8192
     max_num_seqs: 4
     max_num_batched_tokens: 8192
     gpu_memory_utilization: 0.82
+    safetensors_load_strategy: eager
     extra_args: ["--dtype", "half", "--trust-remote-code"]
 
   - id: deepseek-r1:7b-vllm
@@ -72,10 +80,12 @@ models:
     served_model_name: deepseek-r1:7b-vllm
     gpu_group: [2]
     port: 9105
-    mode: cold
+    mode: warm
+    preload: true
     priority: 80
     max_model_len: 8192
     max_num_seqs: 4
     max_num_batched_tokens: 8192
     gpu_memory_utilization: 0.82
+    safetensors_load_strategy: eager
     extra_args: ["--dtype", "half", "--trust-remote-code"]
