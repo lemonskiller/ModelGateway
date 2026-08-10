@@ -306,6 +306,7 @@ _MODEL_GATEWAY_UI = r'''<!doctype html>
     <textarea id="prompt" placeholder="输入要测试的问题。Ctrl/Cmd + Enter 发送。"></textarea>
   </main>
   <script>
+    const apiBase = `${window.location.pathname.replace(/\/$/, '')}/`;
     const modelSelect = document.querySelector('#model');
     const refreshBtn = document.querySelector('#refresh');
     const sendBtn = document.querySelector('#send');
@@ -314,6 +315,28 @@ _MODEL_GATEWAY_UI = r'''<!doctype html>
     const statusEl = document.querySelector('#status');
     const messages = [];
     const setStatus = (text) => { statusEl.textContent = text || ''; };
+    async function readResponseBody(res) {
+      const text = await res.text();
+      const trimmed = text.trim();
+      if (!trimmed) return null;
+      try {
+        return JSON.parse(trimmed);
+      } catch {
+        return { raw: text, contentType: res.headers.get('content-type') || '' };
+      }
+    }
+    function formatError(res, body) {
+      if (body && typeof body === 'object') {
+        if (body.error?.message) return body.error.message;
+        if (body.error) return typeof body.error === 'string' ? body.error : JSON.stringify(body.error);
+        if (body.raw) {
+          const snippet = body.raw.slice(0, 220).replace(/\s+/g, ' ').trim();
+          const prefix = `HTTP ${res.status}`;
+          return snippet ? `${prefix}: ${snippet}` : prefix;
+        }
+      }
+      return `HTTP ${res.status}`;
+    }
     const addMessage = (role, content) => {
       const item = document.createElement('div');
       item.className = `msg ${role}`;
@@ -325,9 +348,9 @@ _MODEL_GATEWAY_UI = r'''<!doctype html>
     };
     async function loadModels() {
       setStatus('加载模型列表...');
-      const res = await fetch('api/models');
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || '加载模型失败');
+      const res = await fetch(`${apiBase}api/models`);
+      const data = await readResponseBody(res);
+      if (!res.ok) throw new Error(formatError(res, data));
       modelSelect.innerHTML = '';
       for (const model of data.data || []) {
         const opt = document.createElement('option');
@@ -348,13 +371,13 @@ _MODEL_GATEWAY_UI = r'''<!doctype html>
       sendBtn.disabled = true;
       setStatus(`请求 ${model}；未就绪模型将自动加载或唤醒...`);
       try {
-        const res = await fetch('api/chat', {
+        const res = await fetch(`${apiBase}api/chat`, {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify({ model, messages })
         });
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.error?.message || data.error || JSON.stringify(data));
+        const data = await readResponseBody(res);
+        if (!res.ok) throw new Error(formatError(res, data));
         const content = data.choices?.[0]?.message?.content || '';
         target.textContent = content || '(空响应)';
         messages.push({ role: 'assistant', content });

@@ -91,8 +91,11 @@ def test_model_gateway_ui_serves_relative_api_client():
 
     assert response.status_code == 200
     assert "ModelGateway vLLM Test" in response.text
-    assert "fetch('api/models')" in response.text
-    assert "fetch('api/chat'" in response.text
+    assert "const apiBase =" in response.text
+    assert "fetch(`${apiBase}api/models`)" in response.text
+    assert "fetch(`${apiBase}api/chat`" in response.text
+    assert "readResponseBody(res)" in response.text
+    assert "formatError(res, data)" in response.text
 
 
 def test_model_gateway_ui_models_endpoint_does_not_require_client_key():
