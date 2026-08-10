@@ -14,15 +14,15 @@ models:
     backend: managed_vllm
     path: /nfs/wxz/source/huggingface/Qwen3-0.6B
     served_model_name: qwen3:0.6b-vllm
-    gpu_group: [0]
+    gpu_group: [3]
     port: 9101
     mode: warm
-    preload: false
+    preload: true
     priority: 100
     max_model_len: 4096
     max_num_seqs: 4
     max_num_batched_tokens: 4096
-    gpu_memory_utilization: 0.70
+    gpu_memory_utilization: 0.25
     extra_args: ["--dtype", "half", "--trust-remote-code"]
 
   - id: qwen3:8b-vllm
