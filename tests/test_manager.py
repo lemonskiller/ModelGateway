@@ -202,3 +202,43 @@ async def test_overlapping_gpu_groups_are_serialized(monkeypatch):
 
     assert max_active_starts == 1
     await manager.client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_managed_vllm_start_disables_v1_engine(monkeypatch):
+    config = GatewayConfig(
+        models={
+            "warm": ModelSpec("warm", "/models/warm", "warm", (0,), 9101)
+        }
+    )
+    manager = ModelManager(config)
+    captured_env: dict[str, str] = {}
+
+    async def fake_create_subprocess_exec(*_args, **kwargs):
+        captured_env.update(kwargs["env"])
+
+        class FakeProcess:
+            returncode = 0
+            stdout = None
+
+            def terminate(self):
+                return None
+
+            async def wait(self):
+                return 0
+
+            def kill(self):
+                return None
+
+        return FakeProcess()
+
+    async def fake_wait_ready(state):
+        state.status = "READY"
+
+    monkeypatch.setattr("app.manager.asyncio.create_subprocess_exec", fake_create_subprocess_exec)
+    monkeypatch.setattr(manager, "_wait_ready", fake_wait_ready)
+
+    await manager._start_worker(manager.states["warm"])
+
+    assert captured_env["VLLM_USE_V1"] == "0"
+    await manager.close()
