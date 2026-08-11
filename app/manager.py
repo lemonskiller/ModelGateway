@@ -233,6 +233,7 @@ class ModelManager:
         environment["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
         environment["CUDA_VISIBLE_DEVICES"] = ",".join(str(gpu) for gpu in state.spec.gpu_group)
         environment["CUDA_HOME"] = environment.get("VLLM_CUDA_HOME", "/usr/local/cuda")
+        environment.setdefault("VLLM_USE_V1", "0")
         vllm_binary = state.spec.vllm_binary or self.config.vllm_binary
         cuda_library_paths = [
             "/usr/local/nvidia/lib64",
