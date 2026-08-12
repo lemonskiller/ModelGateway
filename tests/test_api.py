@@ -141,6 +141,50 @@ def test_metrics_expose_model_status_by_backend_and_mode():
     assert 'status="STOPPED"' in body
     assert "model_gateway_model_active_requests" in body
     assert "model_gateway_model_pending_requests" in body
+    assert "model_gateway_model_requests_total" in body
+    assert "model_gateway_model_request_errors_total" in body
+    assert "model_gateway_model_request_duration_seconds_total" in body
+    assert "model_gateway_model_stream_requests_total" in body
+    assert "model_gateway_model_input_tokens_total" in body
+    assert "model_gateway_model_output_tokens_total" in body
+    assert "model_gateway_model_tokens_total" in body
     assert 'model_manager_model_state{model="qwen3-8b",state="STOPPED",backend="managed_vllm"' in body
     assert "model_manager_queue_size" in body
     assert "model_manager_gpu_lock_held" in body
+
+
+def test_chat_completion_updates_request_metrics_and_logs(caplog):
+    config = make_config()
+    app = create_app(config)
+    with TestClient(app) as client:
+        app.state.manager.states["qwen3-8b"].status = "READY"
+        with caplog.at_level("INFO", logger="model_gateway"):
+            async def fake_post(*_args, **_kwargs):
+                class FakeResponse:
+                    status_code = 200
+                    content = (
+                        b'{"choices":[{"message":{"content":"ok"}}],'
+                        b'"usage":{"prompt_tokens":5,"completion_tokens":7,"total_tokens":12}}'
+                    )
+                    headers = {"content-type": "application/json"}
+
+                return FakeResponse()
+
+            app.state.manager.client.post = fake_post
+            response = client.post(
+                "/v1/chat/completions",
+                headers={"Authorization": "Bearer client-key"},
+                json={"model": "qwen3-8b", "messages": []},
+            )
+
+    assert response.status_code == 200
+    body = app.state.manager.snapshot("qwen3-8b")
+    assert body["requests_total"] == 1
+    assert body["request_errors_total"] == 0
+    assert body["request_duration_total"] >= 0
+    assert body["request_stream_total"] == 0
+    assert body["request_input_tokens_total"] == 5
+    assert body["request_output_tokens_total"] == 7
+    assert body["request_tokens_total"] == 12
+    assert any('"event": "chat_completion"' in record.message for record in caplog.records)
+    assert any('"model_id": "qwen3-8b"' in record.message for record in caplog.records)

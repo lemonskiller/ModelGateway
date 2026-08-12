@@ -46,6 +46,13 @@ class WorkerState:
     pending_requests: int = 0
     last_used: float = 0.0
     log_task: asyncio.Task[None] | None = None
+    requests_total: int = 0
+    request_errors_total: int = 0
+    request_duration_total: float = 0.0
+    request_stream_total: int = 0
+    request_input_tokens_total: int = 0
+    request_output_tokens_total: int = 0
+    request_tokens_total: int = 0
 
 
 class ModelManager:
@@ -129,6 +136,13 @@ class ModelManager:
             "active_requests": state.active_requests,
             "pending_requests": state.pending_requests,
             "last_used": state.last_used,
+            "requests_total": state.requests_total,
+            "request_errors_total": state.request_errors_total,
+            "request_duration_total": state.request_duration_total,
+            "request_stream_total": state.request_stream_total,
+            "request_input_tokens_total": state.request_input_tokens_total,
+            "request_output_tokens_total": state.request_output_tokens_total,
+            "request_tokens_total": state.request_tokens_total,
         }
 
     def snapshots(self) -> list[dict[str, object]]:
@@ -201,6 +215,33 @@ class ModelManager:
 
     async def wake(self, model_id: str) -> None:
         await self.ensure_ready(model_id)
+
+    def record_request(
+        self,
+        model_id: str,
+        *,
+        duration_seconds: float,
+        success: bool,
+        stream: bool,
+        input_tokens: int | None = None,
+        output_tokens: int | None = None,
+        total_tokens: int | None = None,
+    ) -> None:
+        state = self.states.get(model_id)
+        if not state:
+            raise ModelNotFound(f"unknown model: {model_id}")
+        state.requests_total += 1
+        if not success:
+            state.request_errors_total += 1
+        state.request_duration_total += max(0.0, float(duration_seconds))
+        if stream:
+            state.request_stream_total += 1
+        if input_tokens is not None:
+            state.request_input_tokens_total += max(0, int(input_tokens))
+        if output_tokens is not None:
+            state.request_output_tokens_total += max(0, int(output_tokens))
+        if total_tokens is not None:
+            state.request_tokens_total += max(0, int(total_tokens))
 
     async def _evict_conflicts(self, target: ModelSpec) -> None:
         target_gpus = set(target.gpu_group)

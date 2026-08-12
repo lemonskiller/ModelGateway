@@ -2,8 +2,11 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 import hmac
+import logging
 import os
+import time
 from contextlib import asynccontextmanager
 from typing import Any
 
@@ -13,6 +16,9 @@ from fastapi.responses import HTMLResponse, JSONResponse, Response, StreamingRes
 
 from .config import GatewayConfig
 from .manager import GatewayError, ModelManager, Unauthorized
+
+
+logger = logging.getLogger("model_gateway")
 
 
 def _config_path() -> str:
@@ -156,8 +162,9 @@ def create_app(config: GatewayConfig | None = None) -> FastAPI:
         stream = bool(payload.get("stream", False))
         service = manager(request)
         payload["model"] = service.get_spec(model_id).served_model_name
+        started_at = time.monotonic()
         if stream:
-            return await _stream_completion(request, service, model_id, payload)
+            return await _stream_completion(request, service, model_id, payload, started_at)
         async with service.lease(model_id) as spec:
             try:
                 response = await service.client.post(
@@ -167,17 +174,60 @@ def create_app(config: GatewayConfig | None = None) -> FastAPI:
                     timeout=loaded_config.request_timeout,
                 )
             except httpx.HTTPError as error:
+                duration_seconds = time.monotonic() - started_at
+                service.record_request(model_id, duration_seconds=duration_seconds, success=False, stream=False)
+                _log_request(
+                    "chat_completion",
+                    model_id=model_id,
+                    served_model_name=payload["model"],
+                    stream=False,
+                    status_code=502,
+                    duration_seconds=duration_seconds,
+                    error=str(error),
+                )
                 return JSONResponse(
                     status_code=502,
                     content={"error": {"message": f"upstream model request failed: {error}"}},
                 )
+            duration_seconds = time.monotonic() - started_at
+            try:
+                response_payload = response.json()
+            except Exception:
+                response_payload = None
+            input_tokens, output_tokens, total_tokens = _extract_token_usage(response_payload)
+            service.record_request(
+                model_id,
+                duration_seconds=duration_seconds,
+                success=response.status_code < 400,
+                stream=False,
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                total_tokens=total_tokens,
+            )
+            _log_request(
+                "chat_completion",
+                model_id=model_id,
+                served_model_name=payload["model"],
+                stream=False,
+                status_code=response.status_code,
+                duration_seconds=duration_seconds,
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                total_tokens=total_tokens,
+            )
             return Response(
                 content=response.content,
                 status_code=response.status_code,
                 media_type=response.headers.get("content-type", "application/json"),
             )
 
-    async def _stream_completion(request: Request, service: ModelManager, model_id: str, payload: dict[str, Any]):
+    async def _stream_completion(
+        request: Request,
+        service: ModelManager,
+        model_id: str,
+        payload: dict[str, Any],
+        started_at: float,
+    ):
         lease = service.lease(model_id)
         spec = await lease.__aenter__()
         context = service.client.stream(
@@ -193,6 +243,32 @@ def create_app(config: GatewayConfig | None = None) -> FastAPI:
                 content = await response.aread()
                 await context.__aexit__(None, None, None)
                 await lease.__aexit__(None, None, None)
+                duration_seconds = time.monotonic() - started_at
+                try:
+                    response_payload = json.loads(content.decode("utf-8", errors="ignore"))
+                except Exception:
+                    response_payload = None
+                input_tokens, output_tokens, total_tokens = _extract_token_usage(response_payload)
+                service.record_request(
+                    model_id,
+                    duration_seconds=duration_seconds,
+                    success=response.status_code < 400,
+                    stream=True,
+                    input_tokens=input_tokens,
+                    output_tokens=output_tokens,
+                    total_tokens=total_tokens,
+                )
+                _log_request(
+                    "chat_completion",
+                    model_id=model_id,
+                    served_model_name=payload["model"],
+                    stream=True,
+                    status_code=response.status_code,
+                    duration_seconds=duration_seconds,
+                    input_tokens=input_tokens,
+                    output_tokens=output_tokens,
+                    total_tokens=total_tokens,
+                )
                 return Response(
                     content=content,
                     status_code=response.status_code,
@@ -204,15 +280,44 @@ def create_app(config: GatewayConfig | None = None) -> FastAPI:
             await lease.__aexit__(None, None, None)
             raise
 
+        collected_chunks: list[bytes] = []
+
         async def body():
             try:
                 async for chunk in response.aiter_raw():
                     if await request.is_disconnected():
                         break
+                    collected_chunks.append(chunk)
                     yield chunk
             finally:
                 await context.__aexit__(None, None, None)
                 await lease.__aexit__(None, None, None)
+                duration_seconds = time.monotonic() - started_at
+                try:
+                    response_payload = json.loads("".join(ch.decode("utf-8", errors="ignore") for ch in collected_chunks))
+                except Exception:
+                    response_payload = None
+                input_tokens, output_tokens, total_tokens = _extract_token_usage(response_payload)
+                service.record_request(
+                    model_id,
+                    duration_seconds=duration_seconds,
+                    success=response.status_code < 400,
+                    stream=True,
+                    input_tokens=input_tokens,
+                    output_tokens=output_tokens,
+                    total_tokens=total_tokens,
+                )
+                _log_request(
+                    "chat_completion",
+                    model_id=model_id,
+                    served_model_name=payload["model"],
+                    stream=True,
+                    status_code=response.status_code,
+                    duration_seconds=duration_seconds,
+                    input_tokens=input_tokens,
+                    output_tokens=output_tokens,
+                    total_tokens=total_tokens,
+                )
 
         return StreamingResponse(body(), status_code=response.status_code, media_type="text/event-stream")
 
@@ -255,6 +360,36 @@ def create_app(config: GatewayConfig | None = None) -> FastAPI:
         return manager(request).snapshot(model_id)
 
     return app
+
+
+def _log_request(event: str, **fields: object) -> None:
+    logger.info(
+        json.dumps(
+            {
+                "event": event,
+                **fields,
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+            default=str,
+        )
+    )
+
+
+def _extract_token_usage(payload: object) -> tuple[int | None, int | None, int | None]:
+    if not isinstance(payload, dict):
+        return None, None, None
+    usage = payload.get("usage")
+    if not isinstance(usage, dict):
+        return None, None, None
+    input_tokens = usage.get("prompt_tokens", usage.get("input_tokens"))
+    output_tokens = usage.get("completion_tokens", usage.get("output_tokens"))
+    total_tokens = usage.get("total_tokens")
+    return (
+        int(input_tokens) if input_tokens is not None else None,
+        int(output_tokens) if output_tokens is not None else None,
+        int(total_tokens) if total_tokens is not None else None,
+    )
 
 
 app = create_app() if os.path.exists(_config_path()) else FastAPI(title="Model Gateway")
@@ -457,6 +592,14 @@ def _render_metrics(service: ModelManager) -> str:
         "# TYPE model_gateway_model_pending_requests gauge",
         "# HELP model_gateway_model_last_used_seconds Monotonic timestamp of last model use.",
         "# TYPE model_gateway_model_last_used_seconds gauge",
+        "# HELP model_gateway_model_requests_total Total requests observed for a model.",
+        "# TYPE model_gateway_model_requests_total counter",
+        "# HELP model_gateway_model_request_errors_total Failed requests observed for a model.",
+        "# TYPE model_gateway_model_request_errors_total counter",
+        "# HELP model_gateway_model_request_duration_seconds_total Sum of request durations observed for a model.",
+        "# TYPE model_gateway_model_request_duration_seconds_total counter",
+        "# HELP model_gateway_model_stream_requests_total Streaming requests observed for a model.",
+        "# TYPE model_gateway_model_stream_requests_total counter",
     ])
     for state in service.states.values():
         spec = state.spec
@@ -469,6 +612,13 @@ def _render_metrics(service: ModelManager) -> str:
         lines.append(f"model_gateway_model_active_requests{{{dynamic_labels}}} {state.active_requests}")
         lines.append(f"model_gateway_model_pending_requests{{{dynamic_labels}}} {state.pending_requests}")
         lines.append(f"model_gateway_model_last_used_seconds{{{dynamic_labels}}} {state.last_used}")
+        lines.append(f"model_gateway_model_requests_total{{{dynamic_labels}}} {state.requests_total}")
+        lines.append(f"model_gateway_model_request_errors_total{{{dynamic_labels}}} {state.request_errors_total}")
+        lines.append(
+            f"model_gateway_model_request_duration_seconds_total{{{dynamic_labels}}} "
+            f"{state.request_duration_total}"
+        )
+        lines.append(f"model_gateway_model_stream_requests_total{{{dynamic_labels}}} {state.request_stream_total}")
 
     lines.extend([
         "# HELP model_manager_model_state Model manager state by model and deployment backend.",

@@ -112,5 +112,7 @@ networks:
 - Hot/Warm/Cold 模式基础支持
 - Sleep Mode 唤醒和回收
 - 请求队列由 Gateway 的模型就绪流程统一控制
+- 模型请求计数、错误计数、耗时累计、流式请求计数、输入/输出/总 Token 计数
+- 结构化 JSON 请求日志，便于接入 Loki / Grafana
 
-下一步可增加 Prometheus 指标、服务级限流、Redis/数据库注册表和多节点调度。
+下一步可增加服务级限流、Redis/数据库注册表和多节点调度。
