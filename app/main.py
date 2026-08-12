@@ -162,6 +162,8 @@ def create_app(config: GatewayConfig | None = None) -> FastAPI:
         stream = bool(payload.get("stream", False))
         service = manager(request)
         payload["model"] = service.get_spec(model_id).served_model_name
+        if stream:
+            _ensure_stream_usage(payload)
         started_at = time.monotonic()
         if stream:
             return await _stream_completion(request, service, model_id, payload, started_at)
@@ -294,7 +296,7 @@ def create_app(config: GatewayConfig | None = None) -> FastAPI:
                 await lease.__aexit__(None, None, None)
                 duration_seconds = time.monotonic() - started_at
                 try:
-                    response_payload = json.loads("".join(ch.decode("utf-8", errors="ignore") for ch in collected_chunks))
+                    response_payload = _extract_stream_payload(collected_chunks)
                 except Exception:
                     response_payload = None
                 input_tokens, output_tokens, total_tokens = _extract_token_usage(response_payload)
@@ -374,6 +376,45 @@ def _log_request(event: str, **fields: object) -> None:
             default=str,
         )
     )
+
+
+def _ensure_stream_usage(payload: dict[str, Any]) -> None:
+    stream_options = payload.get("stream_options")
+    if isinstance(stream_options, dict):
+        payload["stream_options"] = {**stream_options, "include_usage": True}
+    else:
+        payload["stream_options"] = {"include_usage": True}
+
+
+def _extract_stream_payload(chunks: list[bytes]) -> object:
+    for event in _iter_sse_events(chunks):
+        if event == "[DONE]":
+            continue
+        try:
+            payload = json.loads(event)
+        except Exception:
+            continue
+        if isinstance(payload, dict) and payload.get("usage"):
+            return payload
+    return None
+
+
+def _iter_sse_events(chunks: list[bytes]) -> list[str]:
+    buffer = "".join(chunk.decode("utf-8", errors="ignore") for chunk in chunks).replace("\r\n", "\n")
+    events: list[str] = []
+    for block in buffer.split("\n\n"):
+        data_lines: list[str] = []
+        for line in block.splitlines():
+            stripped = line.lstrip()
+            if not stripped.startswith("data:"):
+                continue
+            data = stripped[5:]
+            if data.startswith(" "):
+                data = data[1:]
+            data_lines.append(data)
+        if data_lines:
+            events.append("\n".join(data_lines).strip())
+    return events
 
 
 def _extract_token_usage(payload: object) -> tuple[int | None, int | None, int | None]:
@@ -600,6 +641,12 @@ def _render_metrics(service: ModelManager) -> str:
         "# TYPE model_gateway_model_request_duration_seconds_total counter",
         "# HELP model_gateway_model_stream_requests_total Streaming requests observed for a model.",
         "# TYPE model_gateway_model_stream_requests_total counter",
+        "# HELP model_gateway_model_input_tokens_total Total input tokens observed for a model.",
+        "# TYPE model_gateway_model_input_tokens_total counter",
+        "# HELP model_gateway_model_output_tokens_total Total output tokens observed for a model.",
+        "# TYPE model_gateway_model_output_tokens_total counter",
+        "# HELP model_gateway_model_tokens_total Total tokens observed for a model.",
+        "# TYPE model_gateway_model_tokens_total counter",
     ])
     for state in service.states.values():
         spec = state.spec
@@ -619,6 +666,9 @@ def _render_metrics(service: ModelManager) -> str:
             f"{state.request_duration_total}"
         )
         lines.append(f"model_gateway_model_stream_requests_total{{{dynamic_labels}}} {state.request_stream_total}")
+        lines.append(f"model_gateway_model_input_tokens_total{{{dynamic_labels}}} {state.request_input_tokens_total}")
+        lines.append(f"model_gateway_model_output_tokens_total{{{dynamic_labels}}} {state.request_output_tokens_total}")
+        lines.append(f"model_gateway_model_tokens_total{{{dynamic_labels}}} {state.request_tokens_total}")
 
     lines.extend([
         "# HELP model_manager_model_state Model manager state by model and deployment backend.",

@@ -168,6 +168,16 @@ def test_chat_completion_updates_request_metrics_and_logs(caplog):
                     )
                     headers = {"content-type": "application/json"}
 
+                    def json(self):
+                        return {
+                            "choices": [{"message": {"content": "ok"}}],
+                            "usage": {
+                                "prompt_tokens": 5,
+                                "completion_tokens": 7,
+                                "total_tokens": 12,
+                            },
+                        }
+
                 return FakeResponse()
 
             app.state.manager.client.post = fake_post
@@ -188,3 +198,59 @@ def test_chat_completion_updates_request_metrics_and_logs(caplog):
     assert body["request_tokens_total"] == 12
     assert any('"event": "chat_completion"' in record.message for record in caplog.records)
     assert any('"model_id": "qwen3-8b"' in record.message for record in caplog.records)
+
+
+def test_stream_chat_completion_updates_request_metrics_and_logs(caplog):
+    config = make_config()
+    app = create_app(config)
+
+    with TestClient(app) as client:
+        app.state.manager.states["qwen3-8b"].status = "READY"
+
+        class FakeStreamResponse:
+            status_code = 200
+            headers = {"content-type": "text/event-stream"}
+            is_error = False
+
+            def __init__(self):
+                self._chunks = [
+                    b'data: {"choices":[{"delta":{"content":"ok"}}]}\n\n',
+                    b'data: {"usage":{"prompt_tokens":3,"completion_tokens":4,"total_tokens":7}}\n\n',
+                    b"data: [DONE]\n\n",
+                ]
+
+            async def aiter_raw(self):
+                for chunk in self._chunks:
+                    yield chunk
+
+            async def aread(self):
+                return b""
+
+        class FakeStreamContext:
+            async def __aenter__(self):
+                return FakeStreamResponse()
+
+            async def __aexit__(self, *_args):
+                return None
+
+        def fake_stream(*_args, **_kwargs):
+            return FakeStreamContext()
+
+        with caplog.at_level("INFO", logger="model_gateway"):
+            app.state.manager.client.stream = fake_stream
+            response = client.post(
+                "/v1/chat/completions",
+                headers={"Authorization": "Bearer client-key"},
+                json={"model": "qwen3-8b", "messages": [], "stream": True},
+            )
+
+    assert response.status_code == 200
+    body = app.state.manager.snapshot("qwen3-8b")
+    assert body["requests_total"] == 1
+    assert body["request_errors_total"] == 0
+    assert body["request_stream_total"] == 1
+    assert body["request_input_tokens_total"] == 3
+    assert body["request_output_tokens_total"] == 4
+    assert body["request_tokens_total"] == 7
+    assert any('"event": "chat_completion"' in record.message for record in caplog.records)
+    assert any('"stream": true' in record.message for record in caplog.records)
